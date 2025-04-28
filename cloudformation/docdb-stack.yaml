@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Serverless Application with DynamoDB, Lambda, and API Gateway
+  Serverless Application with Dynamodb, Lambda, and API Gateway
   (Insert + Fetch Employee records)
 
 Resources:
