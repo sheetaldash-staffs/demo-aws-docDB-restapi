@@ -49,6 +49,9 @@ Resources:
       Handler: index.insert_employee
       Runtime: python3.12
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EmployeesTable
       Code:
         ZipFile: |
           import json
@@ -56,7 +59,7 @@ Resources:
           import os
 
           dynamodb = boto3.resource('dynamodb')
-          table = dynamodb.Table('Employees')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
 
           def insert_employee(event, context):
               body = json.loads(event['body'])
@@ -74,6 +77,9 @@ Resources:
       Handler: index.fetch_employee
       Runtime: python3.12
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EmployeesTable
       Code:
         ZipFile: |
           import json
@@ -81,7 +87,7 @@ Resources:
           import os
 
           dynamodb = boto3.resource('dynamodb')
-          table = dynamodb.Table('Employees')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
 
           def fetch_employee(event, context):
               employee_id = event['pathParameters']['employeeId']
@@ -143,7 +149,7 @@ Resources:
       AuthorizationType: NONE
       Integration:
         Type: AWS_PROXY
-        IntegrationHttpMethod: POST
+        IntegrationHttpMethod: POST  # Still POST for Lambda proxy integration
         Uri: !Sub
           arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FetchEmployeeFunction.Arn}/invocations
 
@@ -163,6 +169,16 @@ Resources:
       FunctionName: !Ref FetchEmployeeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/GET/employees/*
+
+  # API Gateway Deployment and Stage
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      StageName: prod
+    DependsOn:
+      - PostEmployeeMethod
+      - GetEmployeeMethod
 
 Outputs:
   ApiEndpoint:
