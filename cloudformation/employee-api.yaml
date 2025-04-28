@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Serverless Application with Dynamodb, Lambda, and API Gateway
+  (Insert + Fetch Employee records)
+
+Resources:
+
+  # DynamoDB Table
+  EmployeesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Employees
+      AttributeDefinitions:
+        - AttributeName: employeeId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: employeeId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # IAM Role for Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRole-Employees
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDynamoDBPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt EmployeesTable.Arn
+
+  # Lambda Function: Insert Employee
+  InsertEmployeeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: InsertEmployeeFunction
+      Handler: index.insert_employee
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EmployeesTable
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+          def insert_employee(event, context):
+              body = json.loads(event['body'])
+              table.put_item(Item=body)
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Employee inserted successfully!'})
+              }
+
+  # Lambda Function: Fetch Employee
+  FetchEmployeeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FetchEmployeeFunction
+      Handler: index.fetch_employee
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EmployeesTable
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+          def fetch_employee(event, context):
+              employee_id = event['pathParameters']['employeeId']
+              response = table.get_item(Key={'employeeId': employee_id})
+              item = response.get('Item')
+              if not item:
+                  return {
+                      'statusCode': 404,
+                      'body': json.dumps({'message': 'Employee not found'})
+                  }
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(item)
+              }
+
+  # API Gateway
+  EmployeesApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: EmployeesApi
+
+  # API Gateway Resource: /employees
+  EmployeesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ParentId: !GetAtt EmployeesApi.RootResourceId
+      PathPart: employees
+
+  # API Gateway Resource: /employees/{employeeId}
+  EmployeeIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ParentId: !Ref EmployeesResource
+      PathPart: "{employeeId}"
+
+  # API Gateway Method: POST /employees
+  PostEmployeeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref EmployeesResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${InsertEmployeeFunction.Arn}/invocations
+
+  # API Gateway Method: GET /employees/{employeeId}
+  GetEmployeeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref EmployeeIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST  # Still POST for Lambda proxy integration
+        Uri: !Sub
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FetchEmployeeFunction.Arn}/invocations
+
+  # Lambda Permissions for API Gateway
+  InsertEmployeeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref InsertEmployeeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/POST/employees
+
+  FetchEmployeeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FetchEmployeeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/GET/employees/*
+
+  # API Gateway Deployment and Stage
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      StageName: prod
+    DependsOn:
+      - PostEmployeeMethod
+      - GetEmployeeMethod
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${EmployeesApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
